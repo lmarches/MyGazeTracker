@@ -13,6 +13,7 @@ import android.os.Bundle;
 import org.opencv.android.Utils;
 import org.opencv.core.*;
 
+import android.provider.MediaStore;
 import android.util.Log;
 import android.view.SurfaceView;
 import android.view.WindowManager;
@@ -36,6 +37,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.Random;
@@ -55,6 +57,8 @@ public class MainActivity extends AppCompatActivity implements CameraBridgeViewB
     BaseLoaderCallback baseLoaderCallback;
 
     private static final int MY_CAMERA_REQUEST_CODE = 100;
+    private static final int MY_PERMISSIONS_REQUEST_WRITE_EXTERNAL_STORAGE = 1;
+
     private static final String TAG = "MyGazeTracker";
 
     int counter=0;
@@ -66,7 +70,8 @@ public class MainActivity extends AppCompatActivity implements CameraBridgeViewB
 
 
 
-    //----> TF specific variables
+    /////////////////////////////////////////////////////////// <---- TF  variables
+
 
     // presets for rgb conversion
     private static final int RESULTS_TO_SHOW = 3;
@@ -77,8 +82,10 @@ public class MainActivity extends AppCompatActivity implements CameraBridgeViewB
     private final Interpreter.Options tfliteOptions = new Interpreter.Options();
     // tflite graph
     private Interpreter tflite;
+
     // holds all the possible labels for model
     private List<String> labelList;
+
     // holds the selected image data as bytes
     private ByteBuffer imgData = null;
     // holds the probabilities of each label for non-quantized graphs
@@ -93,7 +100,7 @@ public class MainActivity extends AppCompatActivity implements CameraBridgeViewB
 
     // selected classifier information received from extras
     private String chosen;
-    private boolean quant;
+    private boolean quant=false;
 
     // input image dimensions for the Inception Model
     private int DIM_IMG_SIZE_X = 299;
@@ -102,7 +109,30 @@ public class MainActivity extends AppCompatActivity implements CameraBridgeViewB
 
     // int array to hold image data
     private int[] intValues;
-    //<---- TF specific variables
+    /////////////////////////////////////////////////////////// <---- TF  variables
+
+    /////////////////////////////////////////////////////////// <---- My TF  variables
+    // Input placeholders
+    private ByteBuffer eyeLeftData = null;
+    private ByteBuffer eyeRightData = null;
+    private ByteBuffer faceCropData = null;
+    private ByteBuffer faceMaskData = null;
+    private float[][] add_5_Data = null;
+
+    // Output placeholders
+    private static final int DIM_EYE_DATA = 64;
+    private static final int DIM_FACE_CROP_DATA = 64;
+    private static final int DIM_FACE_MASK_DATA = 25;
+    private static final int DIM_OUT_PREDICTION = 2;
+
+    private static final int DIM_PIXEL_SIZE_GAZE = 3;
+    private static final int BYTES =4;
+
+    // https://github.com/Rohithkvsp/MNIST-on-Android-with-TensorflowLite-and-OpenCV/blob/master/app/src/main/java/com/example/rohithkvsp/handwittendigit/Classifier.java
+    private  static final float NORMALIZATION_FACTOR = 255.f;
+
+    /////////////////////////////////////////////////////////// <---- My TF  variables
+
 
 
     // priority queue that will hold the top results from the CNN
@@ -127,6 +157,28 @@ public class MainActivity extends AppCompatActivity implements CameraBridgeViewB
         return fileChannel.map(FileChannel.MapMode.READ_ONLY, startOffset, declaredLength);
     }
 
+
+    //convert opencv mat to tensorflowlite input
+    // normalize between 0 and 1
+    private void convertMattoTfLiteInput(Mat mat, ByteBuffer imgTmp)
+    {
+        imgTmp.rewind();
+        int pixel = 0;
+        for (int i = 0; i < mat.height(); ++i) {
+            for (int j = 0; j < mat.width(); ++j) {
+                imgTmp.putFloat((float)mat.get(i,j)[0]/ NORMALIZATION_FACTOR);
+            }
+        }
+    }
+
+
+
+
+//    Bitmap bitmap_debug_1 = Bitmap.createBitmap(faceCropMat.cols(), faceCropMat.rows(), Bitmap.Config.ARGB_8888);
+//    Utils.matToBitmap(faceCropMat, bitmap_debug_1);
+//
+
+
     // converts bitmap to byte array which is passed in the tflite graph
     private void convertBitmapToByteBuffer(Bitmap bitmap) {
         if (imgData == null) {
@@ -146,9 +198,13 @@ public class MainActivity extends AppCompatActivity implements CameraBridgeViewB
                     imgData.put((byte) ((val >> 8) & 0xFF));
                     imgData.put((byte) (val & 0xFF));
                 } else {
-                    imgData.putFloat((((val >> 16) & 0xFF)-IMAGE_MEAN)/IMAGE_STD);
-                    imgData.putFloat((((val >> 8) & 0xFF)-IMAGE_MEAN)/IMAGE_STD);
-                    imgData.putFloat((((val) & 0xFF)-IMAGE_MEAN)/IMAGE_STD);
+                    imgData.putFloat(((val >> 16) & 0xFF)/(float)255.0);
+                    imgData.putFloat(((val >> 8) & 0xFF)/(float)255.0);
+                    imgData.putFloat(((val) & 0xFF)/(float)255.0);
+
+//                    imgData.putFloat((((val >> 16) & 0xFF)-IMAGE_MEAN)/IMAGE_STD);
+//                    imgData.putFloat((((val >> 8) & 0xFF)-IMAGE_MEAN)/IMAGE_STD);
+//                    imgData.putFloat((((val) & 0xFF)-IMAGE_MEAN)/IMAGE_STD);
                 }
 
             }
@@ -292,19 +348,32 @@ public class MainActivity extends AppCompatActivity implements CameraBridgeViewB
         point_trajectory.add(new IntPair(600,30));
         point_trajectory.add(new IntPair(700,30));
         point_trajectory.add(new IntPair(700,100));
-        point_trajectory.add(new IntPair(10,200));
-        point_trajectory.add(new IntPair(10,300));
-        point_trajectory.add(new IntPair(10,400));
-        point_trajectory.add(new IntPair(10,500));
-        point_trajectory.add(new IntPair(10,600));
-        point_trajectory.add(new IntPair(10,700));
-
-
+        point_trajectory.add(new IntPair(700,200));
+        point_trajectory.add(new IntPair(700,300));
+        point_trajectory.add(new IntPair(700,400));
+        point_trajectory.add(new IntPair(700,500));
+        point_trajectory.add(new IntPair(700,600));
+        point_trajectory.add(new IntPair(600,600));
+        point_trajectory.add(new IntPair(500,500));
+        point_trajectory.add(new IntPair(400,400));
+        point_trajectory.add(new IntPair(300,300));
+        point_trajectory.add(new IntPair(200,200));
+        point_trajectory.add(new IntPair(100,100));
+        point_trajectory.add(new IntPair(50,50));
+        point_trajectory.add(new IntPair(0,0));
+        // Get permission to use camera
         if (checkSelfPermission(Manifest.permission.CAMERA)
 
                 != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.CAMERA},
                     MY_CAMERA_REQUEST_CODE);
+        }
+
+        // Get permission to write images in the gallery
+        if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                    MY_PERMISSIONS_REQUEST_WRITE_EXTERNAL_STORAGE);
         }
 
 
@@ -328,8 +397,10 @@ public class MainActivity extends AppCompatActivity implements CameraBridgeViewB
                         cascadeClassifierEye = new CascadeClassifier(mCascadeFileEye.getAbsolutePath());
                         cascadeClassifierEye.load(mCascadeFileEye.getAbsolutePath());
 
-                        chosen = "inception_float.tflite";
-                        chosen = "inception_quant.tflite";
+//                        chosen = "inception_float.tflite";
+//                        chosen = "inception_quant.tflite";
+                        chosen = "model-23.tflite";
+
                         quant = true ;
 
                         // initialize array that holds image data
@@ -338,36 +409,62 @@ public class MainActivity extends AppCompatActivity implements CameraBridgeViewB
                         // initilize graph and labels
                         try{
                             tflite = new Interpreter(loadModelFile(), tfliteOptions);
-                            labelList = loadLabelList();
+//                            labelList = loadLabelList();  // TF - update:  remove the list of labels
                         } catch (Exception ex){
                             ex.printStackTrace();
                         }
 
-                        // initialize byte array. The size depends if the input data needs to be quantized or not
-                        if(quant){
-                            imgData =
-                                    ByteBuffer.allocateDirect(
-                                            DIM_IMG_SIZE_X * DIM_IMG_SIZE_Y * DIM_PIXEL_SIZE);
-                        } else {
-                            imgData =
-                                    ByteBuffer.allocateDirect(
-                                            4 * DIM_IMG_SIZE_X * DIM_IMG_SIZE_Y * DIM_PIXEL_SIZE);
-                        }
-                        imgData.order(ByteOrder.nativeOrder());
+                        // Initialize byte arrays for tensorflow data
+                        eyeLeftData = ByteBuffer.allocateDirect(DIM_EYE_DATA*
+                                                                DIM_EYE_DATA*
+                                                                DIM_PIXEL_SIZE_GAZE*
+                                                                BYTES);
+                        eyeLeftData.order(ByteOrder.nativeOrder());
 
-                        // initialize probabilities array. The datatypes that array holds depends if the input data needs to be quantized or not
-                        if(quant){
-                            labelProbArrayB= new byte[1][labelList.size()];
-                        } else {
-                            labelProbArray = new float[1][labelList.size()];
-                        }
+                        eyeRightData = ByteBuffer.allocateDirect(DIM_EYE_DATA*
+                                                                 DIM_EYE_DATA*
+                                                                 DIM_PIXEL_SIZE_GAZE*
+                                                                 BYTES);
+                        eyeRightData.order(ByteOrder.nativeOrder());
+
+                        faceCropData = ByteBuffer.allocateDirect(DIM_FACE_CROP_DATA*
+                                                                 DIM_FACE_CROP_DATA*
+                                                                 DIM_PIXEL_SIZE_GAZE*
+                                                                 BYTES);
+                        faceCropData.order(ByteOrder.nativeOrder());
+
+                        //only one channel for the mask
+                        faceMaskData = ByteBuffer.allocateDirect(DIM_FACE_MASK_DATA*
+                                                                 DIM_FACE_MASK_DATA*
+                                                                 BYTES);
+                        faceMaskData.order(ByteOrder.nativeOrder());
+
+                        add_5_Data = new float[1][DIM_OUT_PREDICTION];
 
 
-                        // initialize array to hold top labels
-                        topLables = new String[RESULTS_TO_SHOW];
-                        // initialize array to hold top probabilities
-                        topConfidence = new String[RESULTS_TO_SHOW];
-
+//                        // initialize byte array. The size depends if the input data needs to be quantized or not
+//                        if(quant){
+//                            imgData =
+//                                    ByteBuffer.allocateDirect(
+//                                            DIM_IMG_SIZE_X * DIM_IMG_SIZE_Y * DIM_PIXEL_SIZE);
+//                        } else {
+//                            imgData =
+//                                    ByteBuffer.allocateDirect(
+//                                            4 * DIM_IMG_SIZE_X * DIM_IMG_SIZE_Y * DIM_PIXEL_SIZE);
+//                        }
+//                        imgData.order(ByteOrder.nativeOrder());
+//
+//                        // initialize probabilities array. The datatypes that array holds depends if the input data needs to be quantized or not
+//                        if(quant){
+//                            labelProbArrayB= new byte[1][labelList.size()];
+//                        } else {
+//                            labelProbArray = new float[1][labelList.size()];
+//                        }
+//
+//                        // initialize array to hold top labels
+//                        topLables = new String[RESULTS_TO_SHOW];
+//                        // initialize array to hold top probabilities
+//                        topConfidence = new String[RESULTS_TO_SHOW];
 
                         cameraBridgeViewBase.enableView();
                         break;
@@ -385,76 +482,267 @@ public class MainActivity extends AppCompatActivity implements CameraBridgeViewB
 
 
 
+    public String saveToGallery(Mat imageMat,String filename){
+        Bitmap tmpBitmap = Bitmap.createBitmap(imageMat.cols(),
+                imageMat.rows(),
+                Bitmap.Config.ARGB_8888);
+
+        Utils.matToBitmap(imageMat, tmpBitmap);
+        // Save to gallery
+        return  MediaStore.Images.Media.insertImage(getContentResolver(),
+                        tmpBitmap,
+                        filename,
+                "inputplaceholder");
+    }
+
+
     @Override
     public Mat onCameraFrame(CameraBridgeViewBase.CvCameraViewFrame inputFrame) {
-
-        Mat frame = inputFrame.rgba();
+//        boolean resizeFrame = false;
+//
+//        resizeFrame = false;
+//
+        Mat frame = new Mat();
+//
+//        if (resizeFrame){
+//            Imgproc.resize(inputFrame.rgba(),frame,new Size(360,360));
+//
+//        }else{
+//            frame = inputFrame.rgba();
+//        }
+//
+        frame = inputFrame.rgba();
+//        Mat eyeLeftCropMatResized = new Mat();
+//        Imgproc.resize(eyeLeftCropMat,eyeLeftCropMatResized,sz_eyes);
 
         Core.rotate(frame,frame, Core.ROTATE_90_COUNTERCLOCKWISE);
 
+//        // Test the camera by flipping image and converting to black and white
 //        if (counter % 10 == 0){
 //            Core.flip(frame, frame, 1);
 //            Imgproc.cvtColor(frame, frame, Imgproc.COLOR_RGBA2GRAY);
 //        }
 
-        int index = counter % 15;
+        // specifies the number of frames skipped in the processing pipeline
+        int index = counter % 1;
+        int index_target = counter %20;
 
         if (frame != null & index == 0 ) {
 
-            //converts RGB frame into Bitmap
-            Bitmap bitmap_orig = Bitmap.createBitmap(frame.cols(), frame.rows(), Bitmap.Config.ARGB_8888);
-            Utils.matToBitmap(frame, bitmap_orig);
+//            //converts RGB frame into Bitmap
+//            Bitmap bitmap_orig = Bitmap.createBitmap(frame.cols(), frame.rows(), Bitmap.Config.ARGB_8888);
+//            Utils.matToBitmap(frame, bitmap_orig);
+//
+//            // get current bitmap from imageView
+////            Bitmap bitmap_orig = ((BitmapDrawable)selected_image.getDrawable()).getBitmap();
+//            // resize the bitmap to the required input size to the CNN
+//            Bitmap bitmap = getResizedBitmap(bitmap_orig, DIM_IMG_SIZE_X, DIM_IMG_SIZE_Y);
+//            // convert bitmap to byte array
+//            convertBitmapToByteBuffer(bitmap);
 
-            // get current bitmap from imageView
-//            Bitmap bitmap_orig = ((BitmapDrawable)selected_image.getDrawable()).getBitmap();
-            // resize the bitmap to the required input size to the CNN
-            Bitmap bitmap = getResizedBitmap(bitmap_orig, DIM_IMG_SIZE_X, DIM_IMG_SIZE_Y);
-            // convert bitmap to byte array
-            convertBitmapToByteBuffer(bitmap);
-            // pass byte data to the graph
-            if(quant){
-                tflite.run(imgData, labelProbArrayB);
-            } else {
-                tflite.run(imgData, labelProbArray);
+//            tflite.runForMultipleInputsOutputs();
+//
+            // TF - update
+//            // pass byte data to the graph
+//            if(quant){
+//                tflite.run(imgData, labelProbArrayB);
+//            } else {
+//                tflite.run(imgData, labelProbArray);
+//            }
+//
+//            printTopKLabels();
+            // TF - update
+
+
+            int xPix = 0;
+            int yPix = 0;
+
+
+            // detect faces
+            MatOfRect matOfRectFaces = new MatOfRect();
+            cascadeClassifierFace.detectMultiScale(frame, matOfRectFaces);
+            int newQtdFaces = matOfRectFaces.toList().size();
+
+            // Loop through the faces detected in image
+            for (Rect rectFace : matOfRectFaces.toArray()) {
+                String log = String.format("[LUCA]:  x=%d  - y=%d - width=%d - height=%d", rectFace.x, rectFace.y,rectFace.width,rectFace.height);
+                Log.d(TAG, log);
+
+                // crop the face sub image image by first specifying the rectangle to carve out
+                Rect faceCrop = new Rect(rectFace.x, rectFace.y, rectFace.width, rectFace.height);
+                // Get the cropped face into a new image
+                Mat faceCropMat = frame.submat(faceCrop);
+
+                //converts RGB frame into Bitmap
+
+//                Bitmap bitmap_debug_1 = Bitmap.createBitmap(faceCropMat.cols(), faceCropMat.rows(), Bitmap.Config.ARGB_8888);
+//                Utils.matToBitmap(faceCropMat, bitmap_debug_1);
+
+                    //Initialise rectangles for the eyes
+                MatOfRect matOfRectEyes = new MatOfRect();
+
+                // detect eyes
+                cascadeClassifierEye.detectMultiScale(faceCropMat, matOfRectEyes);
+
+
+                Rect[] eyesArray = matOfRectEyes.toArray();
+                boolean checkPassed=false;
+
+                // check if we have two eyes
+                if (eyesArray.length >1){
+                    // check if size of eyes is within norm
+//                    for (Rect rectEyes : matOfRectEyes.toArray()) {
+//
+//
+//                    }
+                    checkPassed=true;
+
+                }
+
+                // you have one face, at least two eyes, try to predict gaze
+                if (checkPassed) {
+
+                    // Step 1: gather all the input images
+                    // get the crop for the first eye ( eyesArray[0] )
+                    Rect eyeLeftCropRect = new Rect(eyesArray[0].x, eyesArray[0].y,
+                                                eyesArray[0].width, eyesArray[0].height);
+                    Mat eyeLeftCropMat = faceCropMat.submat(eyeLeftCropRect);
+
+                    // get the crop for the second eye
+                    Rect eyeRightCropRect = new Rect(eyesArray[1].x,eyesArray[1].y,
+                                                    eyesArray[1].width, eyesArray[1].height);
+                    Mat eyeRightCropMat = faceCropMat.submat(eyeRightCropRect);
+
+                    // create a binary mask containing the face bounding box in white
+                    Mat faceMaskMat = Mat.zeros(frame.width(),frame.height(),CvType.CV_8U);
+                    Imgproc.rectangle(faceMaskMat,
+                                        new Point(rectFace.x,rectFace.y),
+                                        new Point(rectFace.x +rectFace.width, rectFace.y + rectFace.height),
+                                        new Scalar(255),
+                                        -1,
+                                        1,
+                                        0);
+
+
+
+                    // Step 2: resize everything according to specs
+                    //
+                    // eye_left 64x64
+                    // eye_right 64x64
+                    // face 64x64
+                    // face_mask 625
+                    // Add_5 shape=(?, 2) dtype=float32>
+
+                    Size sz_eyes = new Size(64,64);
+                    Size sz_face = new Size(64,64);
+                    Size sz_faceMask = new Size(25,25);
+
+                    Mat eyeLeftCropMatResized = new Mat();
+                    Imgproc.resize(eyeLeftCropMat,eyeLeftCropMatResized,sz_eyes);
+
+                    Mat eyeRightCropMatResized = new Mat();
+                    Imgproc.resize(eyeRightCropMat, eyeRightCropMatResized, sz_eyes);
+
+                    Mat faceCropMatResized = new Mat();
+                    Imgproc.resize(faceCropMat,faceCropMatResized,sz_face);
+
+                    Mat faceMaskMatResized = new Mat();
+                    Imgproc.resize(faceMaskMat,faceMaskMatResized,sz_faceMask);
+
+
+                    saveToGallery(eyeLeftCropMat,Integer.toString(index)+"_eyeLeft.png");
+                    saveToGallery(eyeRightCropMat,Integer.toString(index)+"_eyeRight.png");
+                    saveToGallery(faceCropMatResized,Integer.toString(index)+"_face.png");
+                    saveToGallery(faceMaskMatResized,Integer.toString(index)+"_faceMask.png");
+
+
+                    // Step 3. Convert to ByteBuffer
+
+
+                    faceMaskMatResized.reshape(1,faceMaskMatResized.width()*faceMaskMatResized.height());
+
+                    convertMattoTfLiteInput(eyeLeftCropMatResized, eyeLeftData);
+                    convertMattoTfLiteInput(eyeRightCropMatResized, eyeRightData);
+                    convertMattoTfLiteInput(faceCropMatResized, faceCropData);
+                    convertMattoTfLiteInput(faceMaskMatResized, faceMaskData);
+
+
+                    // Step 4. Concatenate I/O placeholders
+
+                    // From https://github.com/tensorflow/tensorflow/blob/master/tensorflow/lite/java/src/main/java/org/tensorflow/lite/Interpreter.java
+                    // Object[] inputs = {input0, input1, ...};
+                    Object[] tf_inputs = {eyeLeftData,eyeRightData,faceCropData,faceMaskData};
+
+                    // example in https://stackoverflow.com/questions/54688482/how-to-allocate-multi-dimensional-outputbuffer-to-feed-android-tflites-interpre/56643983
+                    Map<Integer, Object> tf_outputs  = new HashMap<>();
+                    tf_outputs.put(0,add_5_Data);
+
+
+                    // Step 5. Run TF session
+                    tflite.runForMultipleInputsOutputs(tf_inputs,tf_outputs);
+
+                    float[][] predictions = (float[][]) tf_outputs.get(0);
+
+                    xPix = (int)(720*((predictions[0][0]-0.45)/(1.1-0.45)));
+                    yPix = (int)(((360.0/.4)*predictions[0][1])+360);
+
+                    log = String.format("[OUTPUT]: %f ,%f,%d ,%d",predictions[0][0], predictions[0][1],xPix, yPix);
+                    Log.d(TAG, log);
+
+                    // TF - update
+//            // pass byte data to the graph
+//            if(quant){
+//                tflite.run(imgData, labelProbArrayB);.0
+//            } else {
+//                tflite.run(imgData, labelProbArray);
+//            }
+//
+//            printTopKLabels();
+                    // TF - update
+                    // draw bounding boxes
+                    for (Rect rectEyes : matOfRectEyes.toArray()) {
+
+                        log = String.format("[LUCA]: Face width=%d - height=%d",faceCropMat.width(), faceCropMat.height());
+                        Log.d(TAG, log);
+
+
+                        log = String.format("[LUCA]: Eyes coord x=%d - y=%d - width=%d - height=%d", rectEyes.x, rectEyes.y,rectEyes.width,rectEyes.height);
+                        Log.d(TAG, log);
+
+                        // draw eyes bounding boxes into frame
+                        Imgproc.rectangle(frame, new Point(rectFace.x+rectEyes.x, rectFace.y+rectEyes.y),
+                                new Point(rectFace.x+rectEyes.x +rectEyes.width, rectFace.y+rectEyes.y + rectEyes.height),
+                                new Scalar(255, 0, 0),5);
+
+                    }
+                }
+
+                // draw faces bounding box
+                Imgproc.rectangle(frame, new Point(rectFace.x, rectFace.y),
+                        new Point(rectFace.x + rectFace.width, rectFace.y + rectFace.height),
+                        new Scalar(0, 255, 0),5);
             }
 
-            printTopKLabels();
 
-//            MatOfRect matOfRectFaces = new MatOfRect();
-//            MatOfRect matOfRectEyes = new MatOfRect();
-//            cascadeClassifierFace.detectMultiScale(frame, matOfRectFaces);
-//            cascadeClassifierEye.detectMultiScale(frame, matOfRectEyes);
-//
-//            int newQtdFaces = matOfRectFaces.toList().size();
-//
-//
-//            for (Rect rect : matOfRectFaces.toArray()) {
-////                String log = String.format("[LUCA]:  x=%d  - y=%d - width=%d - height=%d", rect.x, rect.y,rect.width,rect.height);
-////                Log.d(TAG, log);
-//                Imgproc.rectangle(frame, new Point(rect.x, rect.y),
-//                        new Point(rect.x + rect.width, rect.y + rect.height),
-//                        new Scalar(0, 255, 0),5);
-//            }
-//
-//            for (Rect rect : matOfRectEyes.toArray()) {
-////                String log = String.format("[LUCA]:  x=%d      - y=%d - width=%d - height=%d", rect.x, rect.y,rect.width,rect.height);
-////                Log.d(TAG, log);
-//                Imgproc.rectangle(frame, new Point(rect.x, rect.y),
-//                        new Point(rect.x + rect.width, rect.y + rect.height),
-//                        new Scalar(255, 0, 0),5);
-//            }
-//
-            IntPair point = point_trajectory.get(index);
+            IntPair point = point_trajectory.get(index_target);
+
 
             //Drawing a Circle
             Imgproc.circle(
                     frame,
-                    new Point(point.i , point.j),
+                    new Point(xPix , yPix),
                     30,
                     new Scalar(0, 0, 255),
                     30
             );
 
+            Imgproc.circle(
+                    frame,
+                    new Point(point.i,point.j),
+                    30,
+                    new Scalar(255,0,0),
+                    30
+            );
         }
 
         counter = counter + 1;
